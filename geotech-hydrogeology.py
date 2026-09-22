@@ -18,7 +18,6 @@ from openpyxl.utils import get_column_letter
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from scipy.optimize import curve_fit, root_scalar
 from scipy.special import exp1
 import streamlit as st
 
@@ -158,7 +157,6 @@ class CPTuDissipationEngine:
         u_decay = u2_kpa[idx_peak:]
 
         if np.min(u_decay) > target_u:
-            # Extrapolate roughly if test was terminated prior to 50% consolidation
             t50 = float(np.max(time_s) * 1.5)
         else:
             t50 = float(np.interp(target_u, u_decay[::-1], t_decay[::-1]))
@@ -185,7 +183,6 @@ class CPTuDissipationEngine:
         if liquid_limit is not None and liquid_limit > 15.0:
             ll = min(liquid_limit, 120.0)
             spec_surface = 1.0 / max(1.3513 - 0.0089 * ll, 0.1)
-            # Representative estimate of clay permeability
             k_kozeny_m_s = 1e-9 * (100.0 / spec_surface) ** 2
 
         return {
@@ -209,13 +206,11 @@ class CPTuDissipationEngine:
 def generate_benchmark_pumping_dataset() -> pd.DataFrame:
     """Generates synthetic transient drawdown data with a known constant-head recharge boundary."""
     np.random.seed(42)
-    # Logarithmically spaced time readings (1 min to 1440 min = 24 hrs)
     time_min = np.array([
         1, 1.5, 2, 3, 4, 5, 6, 8, 10, 15, 20, 30, 45, 60,
         90, 120, 180, 240, 360, 480, 720, 960, 1200, 1440
     ], dtype=float)
 
-    # Reservoir properties: Q = 1800 m3/day, T = 350 m2/day, S = 0.0008, r = 25 m
     q_rate = 1800.0
     t_true = 350.0
     s_true = 0.0008
@@ -224,7 +219,6 @@ def generate_benchmark_pumping_dataset() -> pd.DataFrame:
     t_days = time_min / 1440.0
     s_theis = PumpingTestEngine.calculate_theis_drawdown(t_days, q_rate, t_true, s_true, r_well)
 
-    # Add realistic noise and simulate recharge boundary flattening after 360 min
     drawdown_obs = []
     for t_m, s_val in zip(time_min, s_theis):
         noise = np.random.normal(0, 0.015)
@@ -247,20 +241,18 @@ def generate_benchmark_dissipation_dataset(behavior_type: str = "Monotonic") -> 
         0.5, 1, 2, 4, 8, 15, 30, 60, 120, 240, 480, 900, 1500, 2400
     ], dtype=float)
 
-    u0 = 80.0  # Static hydrostatic pore pressure (kPa)
+    u0 = 80.0
     u_init = 420.0
 
     u2_profile = []
     if behavior_type == "Monotonic":
         for t in time_s:
-            # Monotonic decay
             degree = 1.0 / (1.0 + (t / 110.0) ** 0.85)
             u_current = u0 + (u_init - u0) * degree + np.random.normal(0, 1.2)
             u2_profile.append(round(u_current, 1))
     else:  # Dilatory
         for t in time_s:
             if t <= 15.0:
-                # Pore pressure buildup during stress redistribution
                 u_current = u_init + 45.0 * (1.0 - np.exp(-t / 4.0)) + np.random.normal(0, 1.5)
             else:
                 degree = 1.0 / (1.0 + ((t - 15.0) / 160.0) ** 0.9)
@@ -274,7 +266,7 @@ def generate_benchmark_dissipation_dataset(behavior_type: str = "Monotonic") -> 
 
 
 # -----------------------------------------------------------------------------
-# 3. INTERACTIVE VISUALIZATION DASHBOARDS (PLOTLY)
+# 3. INTERACTIVE VISUALIZATION DASHBOARDS (PLOTLY & MATPLOTLIB)
 # -----------------------------------------------------------------------------
 
 class HydroVisualizer:
@@ -421,7 +413,7 @@ class HydroVisualizer:
         diss_results: Dict,
         u0_static: float
     ) -> io.BytesIO:
-        """Produces a 300 DPI publication-grade dual-panel figure."""
+        """Produces a 300 DPI publication-grade dual-panel figure without layout parser errors."""
         plt.style.use('seaborn-v0_8-whitegrid' if 'seaborn-v0_8-whitegrid' in plt.style.available else 'default')
         fig, axes = plt.subplots(1, 2, figsize=(14, 6), dpi=300)
 
@@ -432,14 +424,17 @@ class HydroVisualizer:
 
         t_fit = np.logspace(np.log10(max(pump_results["t0_min"] * 0.8, 0.5)), np.log10(np.max(t_min)), 100)
         s_fit = pump_results["Slope"] * np.log10(t_fit) + pump_results["Intercept"]
-        axes[0].plot(t_fit, s_fit, '--', color='#d62728', lw=1.8,
-                     label=f'Cooper-Jacob Fit ($T={pump_results["Transmissivity_m2_day"]:.1f}$ m$^2$/day)')
 
+        t_val_str = f"{pump_results['Transmissivity_m2_day']:.1f}"
+        axes[0].plot(t_fit, s_fit, '--', color='#d62728', lw=1.8,
+                     label=f'Cooper-Jacob Fit (T = {t_val_str} m²/day)')
+
+        t0_val_str = f"{pump_results['t0_min']:.2f}"
         axes[0].scatter([pump_results["t0_min"]], [0.0], color='#2ca02c', marker='*', s=120, zorder=4,
-                        label=f'$t_0={pump_results["t0_min"]:.2f}$ min')
+                        label=f't₀ = {t0_val_str} min')
         axes[0].set_xscale('log')
-        axes[0].set_xlabel('Elapsed Pumping Time $t$ (min)', fontsize=10, fontweight='bold')
-        axes[0].set_ylabel('Drawdown $s$ (m)', fontsize=10, fontweight='bold')
+        axes[0].set_xlabel('Elapsed Pumping Time t (min)', fontsize=10, fontweight='bold')
+        axes[0].set_ylabel('Drawdown s (m)', fontsize=10, fontweight='bold')
         axes[0].set_title('(a) Cooper-Jacob Pumping Test Analysis', fontsize=11, fontweight='bold')
         axes[0].invert_yaxis()
         axes[0].legend(loc='lower left', frameon=True, fontsize=8)
@@ -448,23 +443,29 @@ class HydroVisualizer:
         # Panel 2: CPTu Dissipation Profile
         t_s = df_diss["Time_s"].values
         u2 = df_diss["Pore_Pressure_u2_kPa"].values
-        axes[1].plot(t_s, u2, 'o-', color='#ff7f0e', lw=1.8, ms=4, label='Measured $u_2(t)$')
-        axes[1].axhline(u0_static, color='#2ca02c', ls='--', lw=1.4, label=f'Static $u_0={u0_static:.1f}$ kPa')
+        axes[1].plot(t_s, u2, 'o-', color='#ff7f0e', lw=1.8, ms=4, label='Measured u₂(t)')
+        axes[1].axhline(u0_static, color='#2ca02c', ls='--', lw=1.4, label=f'Static u₀ = {u0_static:.1f} kPa')
+
+        u50_str = f"{diss_results['Target_u50_kPa']:.1f}"
         axes[1].axhline(diss_results["Target_u50_kPa"], color='#37474f', ls=':', lw=1.4,
-                        label=f'$u_{{50}}={diss_results["Target_u50_kPa"]:.1f}$ kPa')
+                        label=f'u₅₀ = {u50_str} kPa')
+
+        t50_str = f"{diss_results['t50_s']:.1f}"
         axes[1].axvline(diss_results["t50_s"], color='#9467bd', ls='-.', lw=1.4,
-                        label=f'$t_{{50}}={diss_results["t50_s"]:.1f}$ s')
+                        label=f't₅₀ = {t50_str} s')
 
         axes[1].set_xscale('log')
-        axes[1].set_xlabel('Dissipation Time $t$ (s)', fontsize=10, fontweight='bold')
-        axes[1].set_ylabel('Pore Pressure $u_2$ (kPa)', fontsize=10, fontweight='bold')
+        axes[1].set_xlabel('Dissipation Time t (s)', fontsize=10, fontweight='bold')
+        axes[1].set_ylabel('Pore Pressure u₂ (kPa)', fontsize=10, fontweight='bold')
         axes[1].set_title(f'(b) CPTu Dissipation Response ({diss_results["Behavior"]})', fontsize=11, fontweight='bold')
         axes[1].legend(loc='upper right', frameon=True, fontsize=8)
         axes[1].grid(True, which='both', ls='--', alpha=0.6)
 
         fig.suptitle('Hydrogeological Characterization Suite (CFEM Chapter 5 Standards)',
                      fontsize=13, fontweight='bold', y=0.98)
-        plt.tight_layout()
+
+        # Safe bounding layout
+        fig.subplots_adjust(top=0.90, bottom=0.12, left=0.08, right=0.95, wspace=0.25)
 
         buf = io.BytesIO()
         plt.savefig(buf, format='png', dpi=300, bbox_inches='tight')
